@@ -7,7 +7,7 @@ int countSetBitsRecursive(int n) {
 }
 int main() {
     int n,setBitsCount;
-    printf("Enter a positive integer: ");
+    printf("Enter a negative integer: ");
     if (scanf("%d", &n) != 1) {
         printf("Error enter.\n");
         return 1;

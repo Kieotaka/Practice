@@ -4,7 +4,7 @@
 
 #define Limit_Guide 3
 #define  NAME_SIZE 10
-#define TEL_SIZE 10
+#define TEL_SIZE 100
 typedef struct abonent {
 char name[NAME_SIZE];
 char second_name[NAME_SIZE];
@@ -195,8 +195,6 @@ int Search_subscriber(int *Flag_pointer,int *abonent_count){
 
 int Display_subscribers(int *Flag_pointer,int *abonent_count){
     int found_count = 0;
-    // Для демонстрации того что при удалении экземпляр структуры заполняется то при выводе проходимся по всему массиву Limit_Guide.
-    // Для более правильной работы изменил бы проход в цикле for до *abonent_count тоесть до последнего введеного пользователем абонента.
     for (int i = 0; i < Limit_Guide; i++) {
         printf("Subscriber found:\n");
         printf("  Name: %s\n", massive[i].name);
