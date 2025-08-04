@@ -1,178 +1,152 @@
-
-#include <dirent.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/stat.h>
 #include <ncurses.h>
-#define MAX_FILES 256
-#define MAX_PATH_LENGTH 256
+#include <dirent.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define MAX_PATH 1024
+#define MAX_ITEMS 1024
 
 typedef struct {
-    char files[MAX_FILES][MAX_PATH_LENGTH];
-    int file_count;
-    int selected_file;
-    char current_path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
+    char *items[MAX_ITEMS];
+    int item_count;
+    int selected;
+    int start_line;
 } Panel;
 
-void populate_panel(Panel *panel, const char *path);
-void draw_panel(const Panel *panel, int start_row, int start_col, int height, int width, bool is_active);
-void handle_input(Panel *left_panel, Panel *right_panel, bool *active_panel_left);
-void change_directory(Panel *panel, const char *new_path);
+void free_panel(Panel *panel) {
+    for (int i = 0; i < panel->item_count; i++) {
+        free(panel->items[i]);
+    }
+}
+
+void load_directory(Panel *panel) {
+    free_panel(panel);
+    panel->item_count = 0;
+    panel->selected = 0;
+    panel->start_line = 0;
+
+    DIR *dir = opendir(panel->path);
+    if (!dir) {
+        perror("opendir");
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        if (panel->item_count < MAX_ITEMS) {
+            panel->items[panel->item_count] = strdup(entry->d_name);
+            panel->item_count++;
+        }
+    }
+    closedir(dir);
+}
+
+void draw_panel(WINDOW *win, Panel *panel, int width, int height) {
+    werase(win);
+    box(win, 0, 0);
+
+    mvwprintw(win, 0, 2, " %s ", panel->path);
+
+    int max_display = height - 2;
+    if (panel->start_line > panel->item_count - max_display)
+        panel->start_line = (panel->item_count - max_display > 0) ? panel->item_count - max_display : 0;
+
+    for (int i = 0; i < max_display && (i + panel->start_line) < panel->item_count; i++) {
+        int idx = i + panel->start_line;
+        if (idx == panel->selected)
+            wattron(win, A_REVERSE);
+        mvwprintw(win, i + 1, 1, "%s", panel->items[idx]);
+        wattroff(win, A_REVERSE);
+    }
+
+    wrefresh(win);
+}
 
 int main() {
     initscr();
-    cbreak();
     noecho();
+    cbreak();
     keypad(stdscr, TRUE);
 
-    Panel left_panel, right_panel;
+    int height, width;
+    getmaxyx(stdscr, height, width);
 
-    // Initialize panels
-    strcpy(left_panel.current_path, "/");
-    strcpy(right_panel.current_path, "/");
+    WINDOW *left_win = newwin(height, width / 2, 0, 0);
+    WINDOW *right_win = newwin(height, width - width / 2, 0, width / 2);
 
-    populate_panel(&left_panel, left_panel.current_path);
-    populate_panel(&right_panel, right_panel.current_path);
+    Panel left_panel = { .path = "/", .item_count=0 };
+    Panel right_panel = { .path = "/", .item_count=0 };
+    
+    load_directory(&left_panel);
+    load_directory(&right_panel);
 
-    left_panel.selected_file = 0;
-    right_panel.selected_file = 0;
+    bool active_left = true;
 
-    bool active_panel_left = true;
+    int ch;
+    
+while (1) {
+        draw_panel(left_win, &left_panel, width/2, height);
+        draw_panel(right_win, &right_panel, width - width/2, height);
 
-    while (true) {
-        clear();
+        ch = getch();
 
-        int height, width;
-        getmaxyx(stdscr, height, width);
+        Panel *active_panel = active_left ? &left_panel : &right_panel;
 
-        // Calculate panel dimensions
-        int panel_width = width / 2;
-        int panel_height = height - 2; // Leave space for status bar
+        switch (ch) {
+            case KEY_UP:
+                if (active_panel->selected > 0)
+                    active_panel->selected--;
+                if (active_panel->selected < active_panel->start_line)
+                    active_panel->start_line--;
+                break;
+            case KEY_DOWN:
+                if (active_panel->selected < active_panel->item_count -1)
+                    active_panel->selected++;
+                if (active_panel->selected >= active_panel->start_line + (height -2))
+                    active_panel->start_line++;
+                break;
+            case '\t': 
+                active_left = !active_left;
+                break;
+            case '\n': {
+                char selected_name[MAX_PATH];
+                strcpy(selected_name, active_panel->items[active_panel->selected]);
 
-        // Draw panels
-        draw_panel(&left_panel, 1, 0, panel_height, panel_width, active_panel_left);
-        draw_panel(&right_panel, 1, panel_width, panel_height, panel_width, !active_panel_left);
+                char new_path[MAX_PATH];
+                if (strcmp(active_panel->path,"/") == 0)
+                    snprintf(new_path,sizeof(new_path), "/%s", selected_name);
+                else
+                    snprintf(new_path,sizeof(new_path), "%s/%s", active_panel->path, selected_name);
 
-        // Draw status bar
-        mvprintw(height - 1, 0, "F1 Help  F2 Menu  Tab: Switch Panel  Enter: Open/Change Dir  Q: Quit");
-
-        refresh();
-
-        handle_input(&left_panel, &right_panel, &active_panel_left);
-    }
-
-    endwin();
-    return 0;
-}
-
-void populate_panel(Panel *panel, const char *path) {
-    DIR *dir;
-    struct dirent *ent;
-    panel->file_count = 0;
-
-    if ((dir = opendir(path)) != NULL) {
-        while ((ent = readdir(dir)) != NULL) {
-            if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) { // Avoid infinite loops
-                strncpy(panel->files[panel->file_count], ent->d_name, MAX_PATH_LENGTH - 1);
-                panel->files[panel->file_count][MAX_PATH_LENGTH - 1] = '\0'; // Ensure null termination
-                panel->file_count++;
-                if (panel->file_count >= MAX_FILES) break; //Prevent buffer overflow
-            }
-        }
-        closedir(dir);
-    } else {
-        perror("Could not open directory");
-    }
-}
-
-void draw_panel(const Panel *panel, int start_row, int start_col, int height, int width, bool is_active) {
-    box(stdscr, 0, 0);  // Draw a box around the entire screen
-    mvvline(1, width, ACS_VLINE, height-2); //Vertical line dividing the two panels
-
-    mvprintw(start_row - 1, start_col + 1, "%s", panel->current_path);
-
-    for (int i = 0; i < panel->file_count && i < height - 1; i++) { // Limit files to panel height
-        if (i == panel->selected_file && is_active) {
-            attron(A_REVERSE);
-        }
-        mvprintw(start_row + i, start_col + 1, "%s", panel->files[i]);
-        attroff(A_REVERSE);
-    }
-}
-
-void handle_input(Panel *left_panel, Panel *right_panel, bool *active_panel_left) {
-    int ch = getch();
-    Panel *active_panel = *active_panel_left ? left_panel : right_panel;
-
-    switch (ch) {
-        case KEY_UP:
-            if (active_panel->selected_file > 0) {
-                active_panel->selected_file--;
-            }
-            break;
-        case KEY_DOWN:
-            if (active_panel->selected_file < active_panel->file_count - 1) {
-                active_panel->selected_file++;
-            }
-            break;
-        case 9:  // Tab key
-            *active_panel_left = !(*active_panel_left);
-            break;
-        case 10: // Enter key
-        {
-            char new_path[MAX_PATH_LENGTH];
-            snprintf(new_path, MAX_PATH_LENGTH, "%s/%s", active_panel->current_path, active_panel->files[active_panel->selected_file]);
-
-            struct stat statbuf;
-            if (stat(new_path, &statbuf) == 0) {
-                if (S_ISDIR(statbuf.st_mode)) {
-                    change_directory(active_panel, new_path);
-
-                    active_panel->selected_file = 0; // Reset selection after directory change
+                struct stat st;
+                if (stat(new_path,&st)==0 && S_ISDIR(st.st_mode)) {
+                    strncpy(active_panel->path,new_path,sizeof(active_panel->path));
+                    load_directory(active_panel);
                 } else {
-                    // TODO: Handle file opening (requires external command or more complex logic)
-                    // For now, just print a message
-                    mvprintw(0, 0, "Opening file: %s (not implemented yet)", new_path);
-                    getch();  // Wait for a key press before continuing
+                    mvprintw(0,height-1,"Это не директория: %s", selected_name);
+                    getch();
                 }
-            } else {
-                perror("stat failed");
-                mvprintw(0, 0, "Error accessing file/directory: %s", new_path);
-                getch();
+                break;
             }
-            break;
+            case 'q':
+            case 'Q':
+                goto cleanup;
+            default:
+                break;
         }
-
-        case 'q': // Quit
-        case 'Q':
-            endwin();
-            exit(0);
-            break;
-
-        default:
-            // Ignore other keys
-            break;
-    }
-
-    // Repopulate the panels after any changes
-    populate_panel(left_panel, left_panel->current_path);
-    populate_panel(right_panel, right_panel->current_path);
 }
 
-void change_directory(Panel *panel, const char *new_path) {
-    // Check if the new path is valid and a directory
-    DIR *dir = opendir(new_path);
-    if (dir) {
-        closedir(dir);
-        strncpy(panel->current_path, new_path, MAX_PATH_LENGTH - 1);
-        panel->current_path[MAX_PATH_LENGTH - 1] = '\0';
-        populate_panel(panel, panel->current_path);
-        panel->selected_file = 0;
-    } else {
-        // Error handling (directory doesn't exist or cannot be opened)
-        perror("Could not open directory");
-        mvprintw(0, 0, "Cannot open directory: %s", new_path);  //Print error message
-        getch(); //Wait for keypress to clear the screen
-    }
+cleanup:
+for(int i=0;i<left_panel.item_count;i++) free(left_panel.items[i]);
+for(int i=0;i<right_panel.item_count;i++) free(right_panel.items[i]);
+delwin(left_win);
+delwin(right_win);
+endwin();
+return 0;
 }
