@@ -1,0 +1,33 @@
+#define _POSIX_C_SOURCE 200809L
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <unistd.h>
+int main() {
+    sigset_t mask;
+    int sig;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGUSR1);
+
+    if (sigprocmask(SIG_BLOCK, &mask, NULL) == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Waiting for SIGUSR1. PID: %d\n", getpid());
+
+    while (1) {
+        if (sigwait(&mask, &sig) != 0) {
+            perror("sigwait");
+            exit(EXIT_FAILURE);
+        }
+
+        if (sig == SIGUSR1) {
+            printf("Received SIGUSR1 signal in sigwait loop\n");
+        }
+    }
+
+    return 0;
+}
